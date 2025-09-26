@@ -4,6 +4,7 @@
     "module": "ES2022",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
+    "types": ["react", "react-dom"],
     "strict": true,
     "skipLibCheck": true
   },
