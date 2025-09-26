@@ -1,0 +1,15 @@
+﻿<!doctype html><meta charset="utf-8" />
+<body style="margin:0;background:transparent;color:#fff;font:14px system-ui">
+  <div id="box" style="padding:8px 12px"></div>
+  <script type="module">
+    const API = "https://mutiny-api.mutinycomm.workers.dev";
+    const ch = new URL(location.href).searchParams.get("channel");
+    const box = document.getElementById("box");
+    async function tick(){
+      const r = await fetch(`${API}/overlay/now?channel=${encodeURIComponent(ch||"default")}`, { credentials:"include" });
+      const j = await r.json();
+      box.textContent = j.current ? `Now: ${j.current.title}` : (j.next ? `Next: ${j.next.title}` : "No current block");
+    }
+    tick(); setInterval(tick, 10000);
+  </script>
+</body>
