@@ -1,0 +1,292 @@
+﻿<!doctype html>
+<html>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Mutiny P2P — Stage-Filtered</title>
+<body style="margin:0;background:#0b0c10;color:#e7ebf0;font-family:system-ui">
+  <div style="padding:12px;border-bottom:1px solid #23262e;display:flex;gap:8;align-items:center">
+    <b>Mutiny P2P</b>
+    <span id="who" style="opacity:.7"></span>
+
+    <input id="room" placeholder="room id" style="margin-left:auto;padding:6px 8px;border-radius:8px;background:#0b0c10;color:#e7ebf0;border:1px solid #23262e"/>
+    <input id="code" placeholder="invite code (private)" style="padding:6px 8px;border-radius:8px;background:#0b0c10;color:#e7ebf0;border:1px solid #23262e"/>
+
+    <button id="join">Join</button>
+    <button id="leave">Leave</button>
+    <button id="startCam">Start Cam</button>
+    <button id="shareScreen">Share Screen</button>
+    <span id="stageTip" style="opacity:.7;font-size:12px;margin-left:8px"></span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8;padding:12px">
+    <video id="local" autoplay playsinline muted style="width:100%;background:#111318;border-radius:12px;border:1px solid #23262e"></video>
+    <div id="peers" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8"></div>
+  </div>
+
+<script>
+/* ========================== CONFIG ========================== */
+const API = "https://mutiny-api.mutinycomm.workers.dev";
+
+/* STUN is enough for many cases. Add your TURN here when ready:
+const iceServers = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "turn:your.turn.server:3478", username: "user", credential: "pass" }
+];
+*/
+const iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
+
+/* ========================== STATE =========================== */
+const qs = new URLSearchParams(location.search);
+const defaultRoom = qs.get("room") || "mutiny-demo-room";
+const defaultCode = qs.get("code") || "";
+
+const who = document.getElementById("who");
+const roomInput = document.getElementById("room"); roomInput.value = defaultRoom;
+const codeInput = document.getElementById("code"); codeInput.value = defaultCode;
+
+const localVideo = document.getElementById("local");
+const peersDiv = document.getElementById("peers");
+const stageTip = document.getElementById("stageTip");
+
+let me = null;
+let roomId = defaultRoom;
+let inviteCode = defaultCode;
+
+let localStream = null;
+const peers = new Map(); // remoteId -> { pc, el }
+let lastTargetSet = new Set(); // who we should be connected to per Stage
+let lastStageSummary = "";
+
+/* ========================== HELPERS ========================= */
+async function api(path, opts){ return fetch(API+path, { credentials:"include", ...opts }); }
+async function apiJSON(path){ const r = await api(path); return r.json(); }
+async function apiPOST(path, body){
+  return api(path, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body||{}) });
+}
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+function setStageTip(txt){
+  if (txt !== lastStageSummary){
+    stageTip.textContent = txt;
+    lastStageSummary = txt;
+  }
+}
+
+/* ========================== AUTH ============================ */
+(async function boot(){
+  const j = await apiJSON("/auth/me");
+  me = j.me;
+  if (!me) {
+    alert("Please sign in first (Revolt or Jami) in the main app.");
+    location.href = "./";
+    return;
+  }
+  who.textContent = ` · Signed in as ${me.displayName || me.userId} (${me.provider})`;
+})();
+
+/* ========================== MEDIA UI ======================== */
+document.getElementById("startCam").onclick = async () => {
+  if(localStream) return;
+  try{
+    localStream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
+    localVideo.srcObject = localStream;
+    // Add tracks to existing connections (if any)
+    for (const { pc } of peers.values()){
+      for(const track of localStream.getTracks()){
+        pc.addTrack(track, localStream);
+      }
+    }
+  }catch(e){ alert("Camera/Microphone permission denied."); }
+};
+
+document.getElementById("shareScreen").onclick = async () => {
+  try{
+    const scr = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:true });
+    // Replace video track in all connections
+    for(const {pc} of peers.values()){
+      const senders = pc.getSenders().filter(s => s.track && s.track.kind === "video");
+      if(senders[0]) senders[0].replaceTrack(scr.getVideoTracks()[0]);
+    }
+    localVideo.srcObject = scr;
+  }catch(e){}
+};
+
+/* ========================== JOIN / LEAVE ===================== */
+document.getElementById("join").onclick = async () => {
+  roomId = roomInput.value.trim();
+  inviteCode = codeInput.value.trim();
+
+  // Join Stage as audience (so Host can see you and move you)
+  try {
+    await apiPOST(`/rooms/${encodeURIComponent(roomId)}/join`, {
+      id: me.userId, name: me.displayName || me.userId, code: inviteCode || undefined
+    });
+  } catch (e) {
+    alert("Could not join room (maybe private code is wrong). You can still try P2P but Stage won't include you.");
+  }
+
+  // Register in RTC peers
+  await apiPOST("/rtc/join", { roomId });
+
+  // Start loops
+  pollInbox();
+  pollStage();
+};
+
+document.getElementById("leave").onclick = async () => {
+  try { await apiPOST(`/rooms/${encodeURIComponent(roomId)}/leave`, { id: me.userId }); } catch {}
+  try { await apiPOST("/rtc/leave", { roomId }); } catch {}
+  for(const [id, p] of peers){ p.pc.close(); if(p.el) p.el.remove(); }
+  peers.clear();
+  lastTargetSet = new Set();
+  setStageTip("");
+};
+
+/* ========================== STAGE FILTER ===================== */
+// Only connect to:
+//   - Host (always)
+//   - PLUS everyone in room.stage.onair
+// If room.solo === true: non-hosts connect only to the Host.
+//
+// Offerer policy (to avoid double offers):
+//   - The Host creates offers to everyone in targetSet (except self).
+//   - Non-hosts do NOT create offers; they wait for host offers.
+//
+// This makes host the "broadcaster" who brings people on-air.
+
+async function pollStage(){
+  try{
+    const st = await apiJSON(`/rooms/${encodeURIComponent(roomId)}/state`);
+    const room = st.room || {};
+    const hostId = room.host?.id || null;
+    const isHost = (hostId && me.userId === hostId) || false;
+    const onair = (room.stage?.onair || []);
+    const solo  = !!room.solo;
+
+    // Build target set:
+    // Host is always a target (so others hear the host).
+    const targets = new Set();
+    if (hostId) targets.add(hostId);
+
+    if (solo) {
+      // Only Host (no one else) is a target for non-hosts.
+      // (Host still targets only themselves? We'll still only connect outward from host.)
+    } else {
+      for (const u of onair) targets.add(u);
+    }
+    // Never target yourself
+    targets.delete(me.userId);
+
+    // Update status line:
+    const label = `Host: ${room.host?.name || "?"}${solo ? " · SOLO" : ""} · On-Air: ${onair.length}`;
+    setStageTip(label);
+
+    // Diff: add new targets, remove stale ones
+    const toAdd = [...targets].filter(id => !lastTargetSet.has(id));
+    const toRemove = [...lastTargetSet].filter(id => !targets.has(id));
+
+    // Remove: close connections we shouldn't keep
+    for (const rid of toRemove) stopCall(rid);
+
+    // Add: only host initiates offers; non-hosts create the RTCPeerConnection lazily on message receive.
+    if (isHost) {
+      for (const rid of toAdd) {
+        await ensureCall(rid);
+        await makeOffer(rid);
+      }
+    } else {
+      // Non-hosts prepare RTCPeerConnection objects so when offers come, we’re ready.
+      for (const rid of toAdd) await ensureCall(rid);
+    }
+
+    lastTargetSet = targets;
+  }catch(e){ /* ignore transient errors */ }
+  setTimeout(pollStage, 2000);
+}
+
+/* ========================== RTC SIGNALING ==================== */
+async function pollInbox(){
+  try{
+    const r = await apiJSON(`/rtc/poll?roomId=${encodeURIComponent(roomId)}`);
+    for(const m of (r.messages || [])){ await handleMessage(m); }
+  }catch(e){}
+  setTimeout(pollInbox, 1000);
+}
+
+async function ensureCall(remoteId){
+  if (peers.has(remoteId)) return peers.get(remoteId);
+
+  const pc = new RTCPeerConnection({ iceServers });
+  const el = document.createElement("video");
+  el.autoplay = true; el.playsInline = true;
+  el.style.cssText = "width:100%;background:#111318;border-radius:12px;border:1px solid #23262e";
+  el.dataset.peer = remoteId;
+  peersDiv.appendChild(el);
+
+  pc.onicecandidate = (ev) => {
+    if(ev.candidate){
+      apiPOST("/rtc/send", { roomId, to: remoteId, type: "candidate", data: ev.candidate });
+    }
+  };
+  pc.ontrack = (ev) => { el.srcObject = ev.streams[0]; };
+
+  // add local tracks if any
+  if(localStream){
+    for(const track of localStream.getTracks()){
+      pc.addTrack(track, localStream);
+    }
+  }
+
+  peers.set(remoteId, { pc, el });
+  return { pc, el };
+}
+
+function stopCall(remoteId){
+  const p = peers.get(remoteId);
+  if (!p) return;
+  try { p.pc.close(); } catch {}
+  if (p.el) p.el.remove();
+  peers.delete(remoteId);
+}
+
+async function makeOffer(remoteId){
+  const { pc } = peers.get(remoteId);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await apiPOST("/rtc/send", { roomId, to: remoteId, type:"offer", data: offer });
+}
+
+async function handleMessage(msg){
+  const from = msg.from;
+  if (msg.type === "bye") {
+    stopCall(from);
+    return;
+  }
+  // If this peer is not part of current target set, ignore incoming offers (Stage-enforced).
+  if (!lastTargetSet.has(from) && msg.type === "offer") return;
+
+  await ensureCall(from);
+  const { pc } = peers.get(from);
+
+  if (msg.type === "offer"){
+    // Add tracks if we have them (ensure once)
+    if(localStream){
+      for(const track of localStream.getTracks()){
+        if(!pc.getSenders().find(s => s.track && s.track.id === track.id)){
+          pc.addTrack(track, localStream);
+        }
+      }
+    }
+    await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await apiPOST("/rtc/send", { roomId, to: from, type:"answer", data: answer });
+  } else if (msg.type === "answer"){
+    try { await pc.setRemoteDescription(new RTCSessionDescription(msg.data)); } catch {}
+  } else if (msg.type === "candidate"){
+    try { await pc.addIceCandidate(new RTCIceCandidate(msg.data)); } catch {}
+  }
+}
+</script>
+</body>
+</html>
