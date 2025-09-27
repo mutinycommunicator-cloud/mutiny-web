@@ -1,15 +1,46 @@
-﻿<!doctype html><meta charset="utf-8" />
-<body style="margin:0;background:transparent;color:#fff;font:14px system-ui">
-  <div id="box" style="padding:8px 12px"></div>
-  <script type="module">
-    const API = "https://mutiny-api.mutinycomm.workers.dev";
-    const ch = new URL(location.href).searchParams.get("channel");
-    const box = document.getElementById("box");
-    async function tick(){
-      const r = await fetch(`${API}/overlay/now?channel=${encodeURIComponent(ch||"default")}`, { credentials:"include" });
-      const j = await r.json();
-      box.textContent = j.current ? `Now: ${j.current.title}` : (j.next ? `Next: ${j.next.title}` : "No current block");
+﻿<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mutiny — On-Air</title>
+<style>
+  html,body,#root { height:100%; margin:0; background:#000; color:#fff; font-family: system-ui, sans-serif; }
+  .center { position:absolute; inset:0; display:grid; place-items:center; }
+  iframe, video, audio { width:100%; height:100%; border:0; background:#000; }
+  video { object-fit:contain; }
+</style>
+<div id="root" class="center"><div id="status">Waiting for show…</div></div>
+<script>
+  const API = (window.MUTINY_API_BASE || "https://mutiny-api.mutinycomm.workers.dev").replace(/\/+$/,"");
+  const params = new URLSearchParams(location.search);
+  const room = params.get("room") || "default";
+  const root = document.getElementById("root");
+  let currentEpId = null;
+  function renderNone(msg="No current block.") { root.innerHTML = `<div class="center"><div style="opacity:.7">${msg}</div></div>`; }
+  function renderPlayer(player) {
+    if (!player || !player.length) return renderNone("No media configured.");
+    const p = player[0];
+    let el;
+    if (p.kind === "iframe") {
+      el = document.createElement("iframe");
+      el.allow = "autoplay; picture-in-picture; fullscreen; microphone; camera";
+      el.src = p.src;
+    } else if (p.kind === "video") {
+      el = document.createElement("video"); el.autoplay = true; el.controls = false; el.playsInline = true;
+      const s = document.createElement("source"); s.src = p.src; s.type = p.src.endsWith(".m3u8") ? "application/vnd.apple.mpegURL" : "video/mp4"; el.appendChild(s);
+    } else if (p.kind === "audio") {
+      el = document.createElement("audio"); el.autoplay = true; el.controls = false;
+      const s = document.createElement("source"); s.src = p.src; s.type = "audio/mpeg"; el.appendChild(s);
     }
-    tick(); setInterval(tick, 10000);
-  </script>
-</body>
+    root.innerHTML = ""; root.appendChild(el);
+  }
+  async function poll() {
+    try {
+      const res = await fetch(`${API}/schedule/now?room=${encodeURIComponent(room)}`, { cache: "no-store" });
+      const data = await res.json();
+      if (!data?.episode) { if (currentEpId !== null) { currentEpId = null; renderNone(); } return; }
+      if (data.episode.blocked) return renderNone("Payment processing plugin necessary.");
+      if (data.episode.id !== currentEpId) { currentEpId = data.episode.id; renderPlayer(data.player); }
+    } catch {}
+  }
+  poll(); setInterval(poll, 10000);
+</script>
