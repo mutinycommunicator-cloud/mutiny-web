@@ -1,0 +1,19 @@
+:root {
+  --bg: #0b0c10;
+  --panel: #111318;
+  --border: #23262e;
+  --text: #e7ebf0;
+  --accent: #5b6eff;
+  --accent-2: #7785ff;
+}
+
+:root[data-theme="revolt"] {
+  --bg: #0d0e12;
+  --panel: #101318;
+  --border: #1e222b;
+  --text: #e5e7eb;
+  --accent: #5865f2; /* close to Revolt/Discord hue */
+  --accent-2: #7b86ff;
+}
+
+html, body { background: var(--bg); color: var(--text); }

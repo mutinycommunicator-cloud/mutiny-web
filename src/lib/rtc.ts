@@ -4,8 +4,7 @@ export type RtcMsg =
   | { type: "role"; userId: string; role: Role }
   | { type: "mute"; userId: string; kind: "audio" | "video"; value: boolean }
   | { type: "state"; users: Array<{ userId: string; name: string; role: Role, mutedA?: boolean, mutedV?: boolean }> }
-  | { type: "signal"; to: string; sdp?: any; ice?: any };
-
+  | { type: "signal"; from: string; to: string; sdp?: any; ice?: any };
 export function connectSignaling(apiBase: string, roomId: string, onMsg: (m: RtcMsg)=>void) {
   const wsUrl = apiBase.replace(/^http/, "ws") + `/rtc/room/${encodeURIComponent(roomId)}`;
   const ws = new WebSocket(wsUrl);
