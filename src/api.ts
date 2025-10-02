@@ -1,61 +1,71 @@
-﻿// src/api.ts
-export const API_BASE = (import.meta.env.VITE_API_BASE || "https://mutiny-api.mutinycomm.workers.dev").replace(/\/+$/,"");
+﻿const API = import.meta.env.VITE_API_BASE || "https://mutiny-api.mutinycomm.workers.dev";
 
-export type Msg = { _id: string; author: string; content: string };
+type TokenStore = {
+  get(): string | null;
+  set(token: string, remember: boolean): void;
+  clear(): void;
+};
 
-async function json<T>(res: Response) {
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return (await res.json()) as T;
+const tokenStore: TokenStore = {
+  get() {
+    return sessionStorage.getItem("mutiny_token") || localStorage.getItem("mutiny_token");
+  },
+  set(token, remember) {
+    // no cookies: "remember me" => localStorage, else sessionStorage
+    sessionStorage.removeItem("mutiny_token");
+    localStorage.removeItem("mutiny_token");
+    (remember ? localStorage : sessionStorage).setItem("mutiny_token", token);
+  },
+  clear() {
+    sessionStorage.removeItem("mutiny_token");
+    localStorage.removeItem("mutiny_token");
+  }
+};
+
+function authHeaders() {
+  const t = tokenStore.get();
+  return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
-export const revolt = {
-  async login(id: string, password: string) {
-    const r = await fetch(`${API_BASE}/auth/login`, {
+export const api = {
+  async revoltLogin(login: string, password: string, remember: boolean) {
+    const r = await fetch(`${API}/auth/revolt/login`, {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, password }),
+      body: JSON.stringify({ login, password })
     });
     if (!r.ok) throw new Error("Login failed");
+    const data = await r.json();
+    const token = data.token || data?.result?.token || data?.session?.token; // tolerate shapes
+    if (!token) throw new Error("No token from Revolt");
+    tokenStore.set(token, remember);
     return true;
   },
-  async logout() {
-    await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" });
+
+  logout() {
+    tokenStore.clear();
   },
-  async channelsMine() {
-    // If your Worker adds a real endpoint later, switch to it.
-    // For now, persist the user's last used channels in localStorage as a fallback.
-    const raw = localStorage.getItem("mutiny.channels") || "[]";
-    return JSON.parse(raw) as { id: string; name: string }[];
+
+  me() {
+    return fetch(`${API}/revolt/me`, { headers: { ...authHeaders() } }).then(r => r.json());
   },
-  async rememberChannel(id: string, name: string) {
-    const list = await revolt.channelsMine();
-    if (!list.find(c => c.id === id)) {
-      list.push({ id, name });
-      localStorage.setItem("mutiny.channels", JSON.stringify(list));
-    }
+
+  listChannels() {
+    return fetch(`${API}/revolt/channels`, { headers: { ...authHeaders() } }).then(r => r.json());
   },
-  async getMessages(channelId: string, limit = 50) {
-    const r = await fetch(`${API_BASE}/revolt/channels/${channelId}/messages?limit=${limit}`, { credentials: "include" });
-    return json<Msg[]>(r);
+
+  getMessages(channelId: string, limit = 50) {
+    const q = new URLSearchParams({ limit: String(limit) });
+    return fetch(`${API}/revolt/channels/${channelId}/messages?${q}`, { headers: { ...authHeaders() } }).then(r => r.json());
   },
-  async sendMessage(channelId: string, content: string) {
-    const r = await fetch(`${API_BASE}/revolt/channels/${channelId}/messages`, {
+
+  sendMessage(channelId: string, content: string) {
+    return fetch(`${API}/revolt/channels/${channelId}/messages`, {
       method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-    });
-    return json<Msg>(r);
-  },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ content })
+    }).then(r => r.json());
+  }
 };
 
-export const plugins = {
-  async search(q = "", category = "") {
-    const url = new URL(`${API_BASE}/registry/plugins`);
-    if (q) url.searchParams.set("q", q);
-    if (category) url.searchParams.set("category", category);
-    const r = await fetch(url, { credentials: "include" });
-    return json<{ items: any[] }>(r);
-  },
-};
+export const tokens = tokenStore; // export for UI convenience
