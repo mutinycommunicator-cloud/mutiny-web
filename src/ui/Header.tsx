@@ -1,51 +1,35 @@
-import React, { useEffect, useState } from "react";
-import { logout, me, themeSet, themeCurrent } from "@/lib/api";
+﻿// src/ui/Header.tsx
+import React from "react";
 
-export function HeaderBar({
-  onOpenPlugins, onOpenLogin, onLoggedOut, onLayoutToggle,
-}:{
-  onOpenPlugins:()=>void; onOpenLogin:()=>void; onLoggedOut:()=>void; onLayoutToggle:()=>void;
+export function Header(props: {
+  onOpenPlugins(): void;
+  onLogout(): void;
+  user?: { name: string };
 }) {
-  const [user, setUser] = useState<any>(null);
-  const [curr, setCurr] = useState<string>("default");
-
-  useEffect(() => {
-    (async () => {
-      try { const m = await me(); setUser(m.user || null); } catch {}
-      try { const c = await themeCurrent(); setCurr(c?.id || "default"); applyTheme(c?.id || "default"); } catch {}
-    })();
-  }, []);
-
-  function applyTheme(id: string) {
-    setCurr(id);
-    document.documentElement.setAttribute("data-theme", id === "revolt" ? "revolt" : "default");
-    themeSet(id).catch(()=>{});
-  }
-
-  async function doLogout() { await logout(); setUser(null); onLoggedOut(); }
-
   return (
-    <header style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 16px", borderBottom:"1px solid var(--border)" }}>
-      <b>Mutiny Communicator</b>
-      <button onClick={onLayoutToggle} style={btn}>Toggle Layout</button>
-      <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
-        <select value={curr} onChange={e=>applyTheme(e.target.value)} style={sel}>
-          <option value="default">Default Theme</option>
-          <option value="revolt">Revolt Theme</option>
-        </select>
-        <button onClick={onOpenPlugins} style={btn}>Plugins</button>
-        {user
-          ? <>
-              <span style={{opacity:.7, fontSize:12}}>Hi, {user.name||user.id}</span>
-              <button onClick={doLogout} style={btn}>Logout</button>
-            </>
-          : <button onClick={onOpenLogin} style={btnPrimary}>Login</button>
-        }
+    <header style={{
+      display: "flex", alignItems: "center", gap: 12,
+      padding: "10px 16px", borderBottom: "1px solid #23262e",
+      background: "#0e1016", position: "sticky", top: 0, zIndex: 10
+    }}>
+      <b style={{fontSize: 18}}>Mutiny Communicator</b>
+      <span style={{opacity:.65, fontSize:12}}>stream · chat · plugins</span>
+      <div style={{marginLeft:"auto", display:"flex", gap:8}}>
+        <button onClick={props.onOpenPlugins}
+          style={btn("ghost")}>Plugin Store</button>
+        {props.user
+          ? <button onClick={props.onLogout} style={btn("ghost")}>Logout</button>
+          : null}
       </div>
     </header>
   );
 }
-const btn: React.CSSProperties = { padding:"8px 10px", borderRadius:10, background:"var(--bg)", border:"1px solid var(--border)", color:"var(--text)" };
-const btnPrimary: React.CSSProperties = { padding:"8px 10px", borderRadius:10, background:"var(--accent)", border:"1px solid var(--accent-2)", color:"#fff" };
-const sel: React.CSSProperties = { padding:"8px 10px", borderRadius:10, background:"var(--bg)", border:"1px solid var(--border)", color:"var(--text)" };
-export default HeaderBar;
+
+function btn(kind: "ghost" | "primary" = "primary") {
+  return {
+    padding:"8px 12px", borderRadius:10, cursor:"pointer",
+    background: kind==="primary" ? "#5b6eff" : "#0b0c10",
+    border: "1px solid " + (kind==="primary" ? "#7785ff" : "#23262e"),
+    color:"#e7ebf0"
+  } as React.CSSProperties;
+}
