@@ -1,49 +1,42 @@
-﻿// src/ui/App.tsx
-import React from "react";
-import { Header } from "./Header";
-import { Sidebar, ViewKey } from "./Sidebar";
-import { Home } from "./Home";
-import { PluginStore } from "./PluginStore";
-import { ChatView } from "./Chat";
-import { Studio } from "./Studio";
-import { revolt } from "../api";
+﻿import React, { useState } from "react";
+import Header from "./Header";
+import Sidebar from "./Sidebar";
+import CreateGroup from "./CreateGroup";
+import JoinInvite from "./JoinInvite";
+import Chat from "./Chat"; // your existing chat view; assumes prop channelId
 
 export default function App() {
-  const [view,setView] = React.useState<ViewKey>("home");
-  const [user,setUser] = React.useState<{name:string}|undefined>(undefined);
-  const [showPlugins,setShowPlugins] = React.useState(false);
+  const [channelId, setChannelId] = useState<string>("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [showJoin, setShowJoin] = useState(false);
 
   return (
-    <div style={{background:"#0d0f14", color:"#e7ebf0"}}>
-      <Header onOpenPlugins={()=>{setShowPlugins(true); setView("plugins");}}
-              onLogout={async()=>{ await revolt.logout(); location.reload(); }}
-              user={user}/>
-      <div style={{display:"grid", gridTemplateColumns:"230px 1fr", minHeight:"calc(100vh - 56px)"}}>
-        <Sidebar current={view} onChange={setView}/>
-        <main>
-          {view==="home"     && <Home/>}
-          {view==="dms"      && <ChatView mode="dms"/>}
-          {view==="groups"   && <ChatView mode="groups"/>}
-          {view==="studio"   && <Studio/>}
-          {view==="schedule" && <ScheduleBlurb/>}
-          {view==="plugins"  && <PluginStore/>}
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "#0b0c10", color: "#e7ebf0" }}>
+      <Header
+        onOpenStore={() => location.hash = "#plugins"}
+        onOpenCreateGroup={() => setShowCreate(true)}
+        onOpenJoinInvite={() => setShowJoin(true)}
+      />
+      <div style={{ flex: 1, display: "flex" }}>
+        <Sidebar
+          onOpenChannel={setChannelId}
+          onAskCreateGroup={() => setShowCreate(true)}
+          onAskJoinInvite={() => setShowJoin(true)}
+        />
+        <main style={{ flex: 1, padding: 16 }}>
+          {channelId ? <Chat channelId={channelId}/> : <div style={{ opacity: .7 }}>Pick a DM or join/create a group.</div>}
         </main>
       </div>
-    </div>
-  );
-}
 
-function ScheduleBlurb() {
-  return (
-    <div style={{padding:16}}>
-      <h2 style={{marginTop:0}}>Scheduler</h2>
-      <div style={{opacity:.75, marginBottom:12}}>
-        Weekly planner (grid) like your examples; auto-plays media via Worker’s
-        plugin registry. Open OBS overlay at <code>/overlay-now.html</code>.
-      </div>
-      <div style={{border:"1px dashed #2b3240", borderRadius:16, padding:16, color:"#9fb1ff"}}>
-        Coming in: drag blocks, assign guests, hotkeys.
-      </div>
+      {(showCreate || showJoin) && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)" }}
+             onClick={() => { setShowCreate(false); setShowJoin(false); }}>
+          <div onClick={e => e.stopPropagation()} style={{ position: "absolute", top: "10%", left: "50%", transform: "translateX(-50%)" }}>
+            {showCreate && <CreateGroup onDone={() => setShowCreate(false)}/>}
+            {showJoin && <JoinInvite onDone={() => setShowJoin(false)}/>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

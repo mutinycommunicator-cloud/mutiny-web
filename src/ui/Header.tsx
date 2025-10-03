@@ -1,193 +1,80 @@
-﻿// src/ui/Header.tsx
-import React from "react";
-import { api, tokens } from "@/api";
+﻿import React, { useState } from "react";
+import { revolt } from "@/api";
 
-type HeaderProps = {
-  title?: string;
-  onOpenHome?: () => void;
-  onOpenPlugins?: () => void;
-  onOpenStudio?: () => void;
-  onOpenDMs?: () => void;
-  onLoggedIn?: () => void;   // called after login/logout to let parent refresh
-};
-
-export default function Header({
-  title = "Mutiny Communicator",
-  onOpenHome,
-  onOpenPlugins,
-  onOpenStudio,
-  onOpenDMs,
-  onLoggedIn,
-}: HeaderProps) {
-  const [login, setLogin] = React.useState("");
-  const [password, setPassword] = React.useState("");
-  const [remember, setRemember] = React.useState(true);
-  const [busy, setBusy] = React.useState(false);
-  const [me, setMe] = React.useState<any>(null);
-  const authed = !!tokens.get();
-
-  // fetch minimal user info when authed
-  React.useEffect(() => {
-    let abort = false;
-    if (authed) {
-      api.me().then((m) => {
-        if (!abort) setMe(m);
-      }).catch(() => {
-        if (!abort) setMe(null);
-      });
-    } else {
-      setMe(null);
-    }
-    return () => { abort = true; };
-  }, [authed]);
+export default function Header(props: {
+  onOpenStore: () => void;
+  onOpenCreateGroup: () => void;
+  onOpenJoinInvite: () => void;
+}) {
+  const [showLogin, setShowLogin] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
 
   async function doLogin() {
-    if (!login || !password) {
-      alert("Enter your Revolt login and password");
-      return;
-    }
     try {
-      setBusy(true);
-      await api.revoltLogin(login, password, remember);
-      setPassword("");
-      onLoggedIn?.();
-    } catch (e: any) {
-      alert(e?.message || "Login failed");
-    } finally {
-      setBusy(false);
-    }
+      setBusy(true); setErr("");
+      await revolt.login(email.trim(), password, remember);
+      setShowLogin(false);
+      location.reload();
+    } catch (e: any) { setErr(e.message || "Login failed"); }
+    finally { setBusy(false); }
   }
-
-  function doLogout() {
-    api.logout();
-    onLoggedIn?.();
-  }
-
-  function keyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") doLogin();
-  }
-
-  const S = styles;
 
   return (
-    <header style={S.header}>
-      <div style={S.left}>
-        <span style={S.brand} onClick={onOpenHome}>{title}</span>
-        {authed && (
-          <nav style={S.nav}>
-            <button style={S.navBtn} onClick={onOpenHome}>Home</button>
-            <button style={S.navBtn} onClick={onOpenDMs}>DMs</button>
-            <button style={S.navBtn} onClick={onOpenStudio}>Studio</button>
-            <button style={S.navBtn} onClick={onOpenPlugins}>Plugin Store</button>
-          </nav>
-        )}
-      </div>
+    <header style={{
+      display: "flex", alignItems: "center", gap: 12,
+      padding: "10px 16px", borderBottom: "1px solid #23262e"
+    }}>
+      <b>Mutiny Communicator — Channel-Weaver</b>
 
-      <div style={S.right}>
-        {!authed ? (
-          <div style={S.loginRow}>
-            <input
-              style={S.input}
-              placeholder="Revolt email or username"
-              value={login}
-              onChange={(e) => setLogin(e.target.value)}
-            />
-            <input
-              style={S.input}
-              placeholder="Password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={keyDown}
-            />
-            <label style={S.remember}>
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-              />{" "}
-              Remember me
-            </label>
-            <button style={S.primaryBtn} onClick={doLogin} disabled={busy}>
-              {busy ? "Signing in…" : "Sign in"}
-            </button>
-          </div>
+      <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+        <button onClick={props.onOpenCreateGroup}>+ Group</button>
+        <button onClick={props.onOpenJoinInvite}>Join via Invite</button>
+        <button onClick={props.onOpenStore}>Plugins</button>
+
+        {/* Login / Logout */}
+        {!localStorage.getItem("mutiny_revolt_token") && !sessionStorage.getItem("mutiny_revolt_token") ? (
+          <>
+            <button onClick={() => setShowLogin(true)}>Login</button>
+            {showLogin && (
+              <div style={{
+                position: "fixed", inset: 0, background: "rgba(0,0,0,.4)"
+              }} onClick={() => setShowLogin(false)}>
+                <div onClick={e => e.stopPropagation()}
+                  style={{ width: 360, maxWidth: "92%", background: "#111318",
+                    color: "#e7ebf0", border: "1px solid #23262e", borderRadius: 16,
+                    padding: 16, position: "absolute", top: "12%", left: "50%", transform: "translateX(-50%)" }}>
+                  <h3 style={{ marginTop: 0 }}>Login to Revolt</h3>
+                  <input placeholder="Email" value={email} onChange={e => setEmail(e.target.value)}
+                         style={{ width: "100%", padding: 10, borderRadius: 10, background: "#0b0c10",
+                           border: "1px solid #23262e", color: "#e7ebf0" }}/>
+                  <input type="password" placeholder="Password" value={password}
+                         onChange={e => setPassword(e.target.value)}
+                         onKeyDown={e => e.key === "Enter" && doLogin()}
+                         style={{ width: "100%", marginTop: 8, padding: 10, borderRadius: 10, background: "#0b0c10",
+                           border: "1px solid #23262e", color: "#e7ebf0" }}/>
+                  <label style={{ display: "flex", gap: 6, fontSize: 12, marginTop: 8, opacity: .8 }}>
+                    <input type="checkbox" checked={remember}
+                           onChange={e => setRemember(e.target.checked)}/>
+                    Remember me (stores token)
+                  </label>
+                  {err && <div style={{ color: "#f66", fontSize: 13, marginTop: 6 }}>{err}</div>}
+                  <button onClick={doLogin} disabled={busy}
+                          style={{ marginTop: 10, width: "100%", padding: 10, borderRadius: 10,
+                            background: "#5b6eff", border: "1px solid #7785ff", color: "#fff" }}>
+                    {busy ? "Signing in…" : "Sign in"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         ) : (
-          <div style={S.userRow}>
-            <span style={S.userBadge}>
-              {me?.username || me?.name || "Logged in"}
-            </span>
-            <button style={S.secondaryBtn} onClick={doLogout}>Logout</button>
-          </div>
+          <button onClick={() => { revolt.logout().then(() => location.reload()); }}>Logout</button>
         )}
       </div>
     </header>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  header: {
-    height: 56,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    padding: "0 14px",
-    background: "#0b0c10",
-    color: "#e7ebf0",
-    borderBottom: "1px solid #23262e",
-    position: "sticky",
-    top: 0,
-    zIndex: 10,
-  },
-  left: { display: "flex", alignItems: "center", gap: 14 },
-  brand: {
-    fontWeight: 800,
-    cursor: "pointer",
-    userSelect: "none",
-  },
-  nav: { display: "flex", gap: 8 },
-  navBtn: {
-    padding: "8px 10px",
-    borderRadius: 10,
-    background: "#0f1218",
-    border: "1px solid #2b2f39",
-    color: "#e7ebf0",
-    cursor: "pointer",
-  },
-  right: { display: "flex", alignItems: "center" },
-  loginRow: { display: "flex", alignItems: "center", gap: 8 },
-  input: {
-    width: 200,
-    padding: "8px 10px",
-    borderRadius: 10,
-    background: "#0f1218",
-    border: "1px solid #2b2f39",
-    color: "#e7ebf0",
-  },
-  remember: { fontSize: 13, opacity: 0.9, display: "flex", alignItems: "center", gap: 6 },
-  primaryBtn: {
-    padding: "8px 12px",
-    borderRadius: 10,
-    background: "#5b6eff",
-    border: "1px solid #7785ff",
-    color: "#fff",
-    cursor: "pointer",
-  },
-  secondaryBtn: {
-    padding: "8px 10px",
-    borderRadius: 10,
-    background: "#1f2937",
-    border: "1px solid #334155",
-    color: "#fff",
-    cursor: "pointer",
-  },
-  userRow: { display: "flex", alignItems: "center", gap: 10 },
-  userBadge: {
-    padding: "6px 10px",
-    borderRadius: 999,
-    background: "#111318",
-    border: "1px solid #2b2f39",
-    fontSize: 13,
-  },
-};

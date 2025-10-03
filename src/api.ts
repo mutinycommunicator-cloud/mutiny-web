@@ -1,71 +1,52 @@
-﻿const API = import.meta.env.VITE_API_BASE || "https://mutiny-api.mutinycomm.workers.dev";
+﻿// Tiny client talking to your Worker
+const API = import.meta.env.VITE_API_BASE || "https://mutiny-api.mutinycomm.workers.dev";
 
-type TokenStore = {
-  get(): string | null;
-  set(token: string, remember: boolean): void;
-  clear(): void;
-};
+// token storage (no cookies)
+const TOKEN_KEY = "mutiny_revolt_token";
+function getToken() { return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || ""; }
+function setToken(token: string, remember: boolean) {
+  if (remember) localStorage.setItem(TOKEN_KEY, token);
+  else sessionStorage.setItem(TOKEN_KEY, token);
+}
+function clearToken() { localStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(TOKEN_KEY); }
 
-const tokenStore: TokenStore = {
-  get() {
-    return sessionStorage.getItem("mutiny_token") || localStorage.getItem("mutiny_token");
-  },
-  set(token, remember) {
-    // no cookies: "remember me" => localStorage, else sessionStorage
-    sessionStorage.removeItem("mutiny_token");
-    localStorage.removeItem("mutiny_token");
-    (remember ? localStorage : sessionStorage).setItem("mutiny_token", token);
-  },
-  clear() {
-    sessionStorage.removeItem("mutiny_token");
-    localStorage.removeItem("mutiny_token");
-  }
-};
-
-function authHeaders() {
-  const t = tokenStore.get();
-  return t ? { Authorization: `Bearer ${t}` } : {};
+async function req(path: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers || {});
+  const t = getToken();
+  if (t) headers.set("Authorization", "Bearer " + t);
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const r = await fetch(API + path, { ...init, headers, credentials: "include" });
+  if (!r.ok) throw new Error(`${r.status}`);
+  const ct = r.headers.get("content-type") || "";
+  return ct.includes("application/json") ? r.json() : r.text();
 }
 
-export const api = {
-  async revoltLogin(login: string, password: string, remember: boolean) {
-    const r = await fetch(`${API}/auth/revolt/login`, {
+export const revolt = {
+  async login(email: string, password: string, remember = true) {
+    const data = await req("/revolt/auth/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ login, password })
+      body: JSON.stringify({ email, password, remember, friendly_name: "Mutiny" })
     });
-    if (!r.ok) throw new Error("Login failed");
-    const data = await r.json();
-    const token = data.token || data?.result?.token || data?.session?.token; // tolerate shapes
-    if (!token) throw new Error("No token from Revolt");
-    tokenStore.set(token, remember);
+    if (!data?.token) throw new Error("No token returned");
+    setToken(data.token, remember);
     return true;
   },
-
-  logout() {
-    tokenStore.clear();
+  async logout() {
+    try { await req("/revolt/auth/logout", { method: "POST" }); } catch {}
+    clearToken();
   },
+  me: () => req("/revolt/users/me"),
+  dms: () => req("/revolt/dms"),
+  openDM: (userId: string) => req(`/revolt/dm/open/${encodeURIComponent(userId)}`, { method: "PUT" }),
+  createGroup: (name: string, recipients: string[]) =>
+    req("/revolt/groups/create", { method: "POST", body: JSON.stringify({ name, recipients }) }),
+  createInvite: (channelId: string) =>
+    req(`/revolt/channels/${encodeURIComponent(channelId)}/invites`, { method: "POST", body: "{}" }),
+  joinInvite: (code: string) => req(`/revolt/invites/join/${encodeURIComponent(code)}`, { method: "POST" }),
 
-  me() {
-    return fetch(`${API}/revolt/me`, { headers: { ...authHeaders() } }).then(r => r.json());
-  },
-
-  listChannels() {
-    return fetch(`${API}/revolt/channels`, { headers: { ...authHeaders() } }).then(r => r.json());
-  },
-
-  getMessages(channelId: string, limit = 50) {
-    const q = new URLSearchParams({ limit: String(limit) });
-    return fetch(`${API}/revolt/channels/${channelId}/messages?${q}`, { headers: { ...authHeaders() } }).then(r => r.json());
-  },
-
-  sendMessage(channelId: string, content: string) {
-    return fetch(`${API}/revolt/channels/${channelId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ content })
-    }).then(r => r.json());
-  }
+  // friends
+  sendFriendRequest: (username: string) =>
+    req("/revolt/friends/request", { method: "POST", body: JSON.stringify({ username }) }),
+  acceptFriend: (userId: string) => req(`/revolt/friends/accept/${encodeURIComponent(userId)}`, { method: "PUT" }),
+  removeFriend: (userId: string) => req(`/revolt/friends/${encodeURIComponent(userId)}`, { method: "DELETE" }),
 };
-
-export const tokens = tokenStore; // export for UI convenience
