@@ -1,119 +1,175 @@
-﻿// src/ui/Chat.tsx
-import React from "react";
-import { revolt, Msg } from "../api";
+﻿import React from "react";
 
-export function ChatView({mode}:{mode:"dms"|"groups"}) {
-  const [channels,setChannels] = React.useState<{id:string;name:string}[]>([]);
-  const [current,setCurrent] = React.useState<{id:string;name:string}|null>(null);
-  const [manualId,setManualId] = React.useState("");
+const API =
+  (import.meta as any).env?.VITE_API_BASE ||
+  "https://mutiny-api.mutinycomm.workers.dev";
 
-  React.useEffect(()=>{
-    revolt.channelsMine().then(setChannels);
-  },[]);
-
-  async function addManual() {
-    if (!manualId.trim()) return;
-    await revolt.rememberChannel(manualId.trim(), manualId.trim());
-    const list = await revolt.channelsMine();
-    setChannels(list);
-    setCurrent({id:manualId.trim(), name:manualId.trim()});
-    setManualId("");
-  }
-
-  return (
-    <div style={{display:"grid", gridTemplateColumns:"260px 1fr 320px", height:"calc(100vh - 56px)"}}>
-      {/* left list */}
-      <div style={{borderRight:"1px solid #23262e", padding:12}}>
-        <b style={{display:"block", marginBottom:8}}>{mode==="dms"?"Direct Messages":"Groups"}</b>
-        <div style={{display:"flex", gap:8, marginBottom:10}}>
-          <input placeholder={mode==="dms"?"DM Channel ID":"Group Channel ID"}
-            value={manualId} onChange={e=>setManualId(e.target.value)} style={inp}/>
-          <button onClick={addManual} style={btn("ghost")}>Add</button>
-        </div>
-        <div style={{display:"grid", gap:6}}>
-          {channels.map(c=>(
-            <button key={c.id} onClick={()=>setCurrent(c)} style={{
-              textAlign:"left", padding:"8px 10px", borderRadius:10,
-              background: current?.id===c.id ? "#1f2937":"#0b0c10",
-              border:"1px solid #23262e", color:"#e7ebf0"
-            }}>{c.name || c.id}</button>
-          ))}
-          {!channels.length && <div style={{opacity:.7}}>No channels yet – add one above.</div>}
-        </div>
-      </div>
-
-      {/* center room */}
-      <div style={{borderRight:"1px solid #23262e"}}>
-        {current ? <ChatRoom channel={current}/> : <EmptyHint/>}
-      </div>
-
-      {/* right info rail */}
-      <div style={{padding:12}}>
-        <b>Conversation Information</b>
-        <div style={{opacity:.7, fontSize:12, marginTop:6}}>
-          Participants, pinned links, attachments… (coming)
-        </div>
-      </div>
-    </div>
-  );
+// the token we stored on login (no cookies)
+const TOKEN_KEY = "mutiny_revolt_token";
+function authHeaders() {
+  const t =
+    localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || "";
+  const h = new Headers();
+  if (t) h.set("Authorization", "Bearer " + t); // Worker maps → X-Session-Token
+  h.set("Content-Type", "application/json");
+  return h;
 }
 
-function ChatRoom({channel}:{channel:{id:string;name:string}}) {
-  const [msgs,setMsgs] = React.useState<Msg[]>([]);
-  const [text,setText] = React.useState("");
-  const [loading,setLoading] = React.useState(false);
+async function loadMessages(channelId: string, limit = 50) {
+  const r = await fetch(
+    `${API}/revolt/channels/${encodeURIComponent(
+      channelId
+    )}/messages?limit=${limit}`,
+    { headers: authHeaders() }
+  );
+  if (!r.ok) throw new Error(`Load failed: ${r.status}`);
+  return r.json();
+}
 
-  async function load() {
+async function postMessage(channelId: string, content: string) {
+  const r = await fetch(
+    `${API}/revolt/channels/${encodeURIComponent(channelId)}/messages`,
+    { method: "POST", headers: authHeaders(), body: JSON.stringify({ content }) }
+  );
+  if (!r.ok) throw new Error(`Send failed: ${r.status}`);
+  return r.json();
+}
+
+export default function Chat({ channelId }: { channelId?: string }) {
+  const [channel, setChannel] = React.useState(channelId || "");
+  const [msgs, setMsgs] = React.useState<any[]>([]);
+  const [text, setText] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState("");
+
+  // keep internal channel in sync with prop
+  React.useEffect(() => {
+    if (channelId && channelId !== channel) setChannel(channelId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId]);
+
+  async function reload() {
+    if (!channel) return;
     setLoading(true);
-    try { setMsgs(await revolt.getMessages(channel.id, 50)); }
-    finally { setLoading(false); }
+    setErr("");
+    try {
+      const data = await loadMessages(channel, 50);
+      setMsgs(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setErr(e?.message || "Failed to load");
+    } finally {
+      setLoading(false);
+    }
   }
-  React.useEffect(()=>{ load(); }, [channel.id]);
 
   async function send() {
-    if (!text.trim()) return;
-    await revolt.sendMessage(channel.id, text.trim());
-    setText(""); load();
+    if (!channel || !text.trim()) return;
+    try {
+      await postMessage(channel, text.trim());
+      setText("");
+      reload();
+    } catch (e: any) {
+      setErr(e?.message || "Failed to send");
+    }
   }
 
+  React.useEffect(() => {
+    if (!channel) return;
+    reload();
+    const t = setInterval(reload, 3000); // simple poll
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channel]);
+
   return (
-    <div style={{display:"grid", gridTemplateRows:"auto 1fr auto", height:"100%"}}>
-      <div style={{padding:"10px 12px", borderBottom:"1px solid #23262e"}}>
-        <b>{channel.name}</b>
-        <button onClick={load} style={{...btn("ghost"), float:"right"}}>{loading?"…":"Reload"}</button>
+    <section
+      style={{
+        border: "1px solid #23262e",
+        borderRadius: 16,
+        overflow: "hidden",
+        background: "#0b0c10",
+        color: "#e7ebf0",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          padding: 12,
+          borderBottom: "1px solid #23262e",
+        }}
+      >
+        {!channelId && (
+          <input
+            placeholder="Revolt Channel ID (DM / Group / Server channel)"
+            value={channel}
+            onChange={(e) => setChannel(e.target.value)}
+            style={inp}
+          />
+        )}
+        <button onClick={reload} style={btn}>
+          {loading ? "Loading…" : "Load"}
+        </button>
       </div>
 
-      <div style={{padding:12, overflowY:"auto"}}>
-        {msgs.map(m=>(
-          <div key={m._id} style={{marginBottom:10}}>
-            <div style={{fontSize:12, opacity:.7}}>{m.author}</div>
+      {!!err && (
+        <div style={{ color: "#f66", fontSize: 12, padding: "6px 12px" }}>
+          {err}
+        </div>
+      )}
+
+      <div style={{ height: 260, overflowY: "auto", padding: 12 }}>
+        {msgs.map((m: any) => (
+          <div key={m._id} style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>{m.author}</div>
             <div>{m.content}</div>
           </div>
         ))}
-        {!msgs.length && <div style={{opacity:.6}}>No messages yet.</div>}
+        {!msgs.length && <div style={{ opacity: 0.6 }}>No messages yet.</div>}
       </div>
 
-      <div style={{display:"flex", gap:8, padding:12, borderTop:"1px solid #23262e"}}>
-        <input placeholder="Message…" value={text} onChange={e=>setText(e.target.value)}
-          onKeyDown={e=>e.key==="Enter" && send()} style={inp}/>
-        <button onClick={send} style={btn()}>Send</button>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          padding: 12,
+          borderTop: "1px solid #23262e",
+        }}
+      >
+        <input
+          placeholder="Message…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send()}
+          style={inp}
+        />
+        <button onClick={send} style={sendBtn}>
+          Send
+        </button>
       </div>
-    </div>
+    </section>
   );
 }
 
-function EmptyHint() {
-  return <div style={{display:"grid", placeItems:"center", height:"100%", opacity:.65}}>Pick a channel on the left.</div>;
-}
-
-const btn = (k:"primary"|"ghost"="primary") => ({
-  padding:"8px 10px", borderRadius:10, cursor:"pointer",
-  background: k==="primary" ? "#5b6eff" : "#0b0c10",
-  border: "1px solid " + (k==="primary" ? "#7785ff" : "#23262e"),
-  color:"#e7ebf0"
-}) as React.CSSProperties;
-
 const inp: React.CSSProperties = {
-  flex:1, padding:"10px", borderRadius:10, background:"#0b0c10",
-  border:"1px solid #23262e", color:"#e7ebf0"
+  flex: 1,
+  padding: 10,
+  borderRadius: 10,
+  background: "#0b0c10",
+  border: "1px solid #23262e",
+  color: "#e7ebf0",
+};
+const btn: React.CSSProperties = {
+  padding: "8px 10px",
+  borderRadius: 10,
+  background: "#0b0c10",
+  border: "1px solid #23262e",
+  color: "#e7ebf0",
+};
+const sendBtn: React.CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 10,
+  background: "#5b6eff",
+  border: "1px solid #7785ff",
+  color: "#fff",
 };
