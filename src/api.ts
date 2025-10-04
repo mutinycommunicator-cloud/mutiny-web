@@ -1,52 +1,69 @@
-﻿// Tiny client talking to your Worker
-const API = import.meta.env.VITE_API_BASE || "https://mutiny-api.mutinycomm.workers.dev";
+﻿// src/api.ts
+const API_BASE = import.meta.env.VITE_API_BASE || "https://mutiny-api.mutinycomm.workers.dev";
 
-// token storage (no cookies)
-const TOKEN_KEY = "mutiny_revolt_token";
-function getToken() { return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || ""; }
-function setToken(token: string, remember: boolean) {
-  if (remember) localStorage.setItem(TOKEN_KEY, token);
-  else sessionStorage.setItem(TOKEN_KEY, token);
-}
-function clearToken() { localStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(TOKEN_KEY); }
-
-async function req(path: string, init: RequestInit = {}) {
-  const headers = new Headers(init.headers || {});
-  const t = getToken();
-  if (t) headers.set("Authorization", "Bearer " + t);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const r = await fetch(API + path, { ...init, headers, credentials: "include" });
-  if (!r.ok) throw new Error(`${r.status}`);
-  const ct = r.headers.get("content-type") || "";
-  return ct.includes("application/json") ? r.json() : r.text();
+async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+    ...init,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${path} ${text ? "- " + text : ""}`);
+  }
+  return (await res.json()) as T;
 }
 
-export const revolt = {
-  async login(email: string, password: string, remember = true) {
-    const data = await req("/revolt/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password, remember, friendly_name: "Mutiny" })
-    });
-    if (!data?.token) throw new Error("No token returned");
-    setToken(data.token, remember);
-    return true;
-  },
-  async logout() {
-    try { await req("/revolt/auth/logout", { method: "POST" }); } catch {}
-    clearToken();
-  },
-  me: () => req("/revolt/users/me"),
-  dms: () => req("/revolt/dms"),
-  openDM: (userId: string) => req(`/revolt/dm/open/${encodeURIComponent(userId)}`, { method: "PUT" }),
-  createGroup: (name: string, recipients: string[]) =>
-    req("/revolt/groups/create", { method: "POST", body: JSON.stringify({ name, recipients }) }),
-  createInvite: (channelId: string) =>
-    req(`/revolt/channels/${encodeURIComponent(channelId)}/invites`, { method: "POST", body: "{}" }),
-  joinInvite: (code: string) => req(`/revolt/invites/join/${encodeURIComponent(code)}`, { method: "POST" }),
+// ---- Revolt auth/session ----
+export async function loginRevolt(username: string, password: string, remember = true) {
+  return req<{ ok: boolean }>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ id: username, password, remember }),
+  });
+}
+export async function logoutRevolt() {
+  await req<{ ok: boolean }>("/auth/logout", { method: "POST" });
+}
 
-  // friends
-  sendFriendRequest: (username: string) =>
-    req("/revolt/friends/request", { method: "POST", body: JSON.stringify({ username }) }),
-  acceptFriend: (userId: string) => req(`/revolt/friends/accept/${encodeURIComponent(userId)}`, { method: "PUT" }),
-  removeFriend: (userId: string) => req(`/revolt/friends/${encodeURIComponent(userId)}`, { method: "DELETE" }),
-};
+// ---- Me / relationships ----
+export type RevoltUser = { _id: string; username?: string; display_name?: string; avatar?: string };
+export type RevoltServer = { _id: string; name: string; icon?: string };
+
+export async function getMe() {
+  return req<{ user: RevoltUser }>("/revolt/me");
+}
+export async function getFriends() {
+  // friends = users you have a relationship with (accepted)
+  return req<{ friends: RevoltUser[] }>("/revolt/friends");
+}
+export async function getServers() {
+  // servers you’re a member of
+  return req<{ servers: RevoltServer[] }>("/revolt/servers");
+}
+
+// ---- Channels / DMs ----
+export type RevoltChannel = { _id: string; name?: string; channel_type: string };
+
+export async function getServerChannels(serverId: string) {
+  return req<{ channels: RevoltChannel[] }>(`/revolt/servers/${serverId}/channels`);
+}
+
+export async function openDMWithUser(userId: string) {
+  // Creates/returns an existing DM channel with that user
+  return req<{ channel: RevoltChannel }>(`/revolt/users/${userId}/dm`, { method: "POST" });
+}
+
+export async function listDMs() {
+  return req<{ channels: RevoltChannel[] }>(`/revolt/dms`);
+}
+
+// ---- Messages (your existing ones keep working) ----
+export async function getMessages(channelId: string, limit = 50) {
+  return req<any[]>(`/revolt/channels/${channelId}/messages?limit=${limit}`);
+}
+export async function sendMessage(channelId: string, content: string) {
+  return req<any>(`/revolt/channels/${channelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
