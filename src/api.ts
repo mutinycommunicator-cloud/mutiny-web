@@ -33,11 +33,9 @@ export async function getMe() {
   return req<{ user: RevoltUser }>("/revolt/me");
 }
 export async function getFriends() {
-  // friends = users you have a relationship with (accepted)
   return req<{ friends: RevoltUser[] }>("/revolt/friends");
 }
 export async function getServers() {
-  // servers you’re a member of
   return req<{ servers: RevoltServer[] }>("/revolt/servers");
 }
 
@@ -47,17 +45,14 @@ export type RevoltChannel = { _id: string; name?: string; channel_type: string }
 export async function getServerChannels(serverId: string) {
   return req<{ channels: RevoltChannel[] }>(`/revolt/servers/${serverId}/channels`);
 }
-
 export async function openDMWithUser(userId: string) {
-  // Creates/returns an existing DM channel with that user
   return req<{ channel: RevoltChannel }>(`/revolt/users/${userId}/dm`, { method: "POST" });
 }
-
 export async function listDMs() {
   return req<{ channels: RevoltChannel[] }>(`/revolt/dms`);
 }
 
-// ---- Messages (your existing ones keep working) ----
+// ---- Messages ----
 export async function getMessages(channelId: string, limit = 50) {
   return req<any[]>(`/revolt/channels/${channelId}/messages?limit=${limit}`);
 }
@@ -67,3 +62,55 @@ export async function sendMessage(channelId: string, content: string) {
     body: JSON.stringify({ content }),
   });
 }
+
+// ---- Plugins (Registry + Installed) ----
+export type PluginItem = {
+  id: string;
+  name: string;
+  version: string;
+  categories?: string[];
+  capabilities?: string[];
+  icon?: string;
+  player?: any;
+  accepts?: string[];
+  parse?: { regex: string; group: number };
+};
+
+export async function searchPlugins(q = "", category = "") {
+  const u = new URL(`${API_BASE}/registry/plugins`);
+  if (q) u.searchParams.set("q", q);
+  if (category) u.searchParams.set("category", category);
+  const res = await fetch(u.toString(), { credentials: "include" });
+  if (!res.ok) throw new Error(`Registry search failed (${res.status})`);
+  return (await res.json()) as { items: PluginItem[] };
+}
+export async function installedPlugins() {
+  return req<{ items: string[] }>("/plugins/installed");
+}
+export async function installPlugin(id: string) {
+  return req<{ ok: boolean }>("/plugins/install", {
+    method: "POST",
+    body: JSON.stringify({ id }),
+  });
+}
+export async function uninstallPlugin(id: string) {
+  return req<{ ok: boolean }>("/plugins/uninstall", {
+    method: "POST",
+    body: JSON.stringify({ id }),
+  });
+}
+export async function submitPlugin(manifestUrl: string) {
+  return req<{ ok: boolean; received: string | null }>("/registry/submit", {
+    method: "POST",
+    body: JSON.stringify({ manifest_url: manifestUrl }),
+  });
+}
+
+// Optional convenience object so UI can `import { plugins } from "@/api"`
+export const plugins = {
+  search: searchPlugins,
+  installed: installedPlugins,
+  install: installPlugin,
+  uninstall: uninstallPlugin,
+  submit: submitPlugin,
+};
