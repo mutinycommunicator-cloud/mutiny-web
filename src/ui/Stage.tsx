@@ -1,5 +1,4 @@
-﻿// src/ui/Stage.tsx
-import React from "react";
+﻿import React from "react";
 
 export default function Stage() {
   return (
@@ -11,4 +10,3 @@ export default function Stage() {
     </div>
   );
 }
-
